@@ -20,4 +20,6 @@ pub enum StakeError {
     NothingToClaim,
     #[msg("Arithmetic overflow")]
     Overflow,
+    #[msg("Pool settings would let rewards overflow, or allow no stakes at all")]
+    InvalidConfig,
 }

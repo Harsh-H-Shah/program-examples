@@ -25,9 +25,15 @@ pub mod nft_staking {
         points_per_day: u64,
         max_stake: u8,
         freeze_period_days: u32,
-        _reward_decimals: u8,
+        reward_decimals: u8,
     ) -> Result<()> {
-        context.accounts.initialize_config(points_per_day, max_stake, freeze_period_days, &context.bumps)
+        context.accounts.initialize_config(
+            points_per_day,
+            max_stake,
+            freeze_period_days,
+            reward_decimals,
+            &context.bumps,
+        )
     }
 
     /// Creates the caller's per-user totals account. Called once per user.

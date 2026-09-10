@@ -17,7 +17,7 @@ pub struct Claim<'info> {
     pub nft_mint: Account<'info, Mint>,
 
     #[account(
-        seeds = [b"config"],
+        seeds = [b"config", config.admin.as_ref()],
         bump = config.bump,
     )]
     pub config: Account<'info, StakeConfig>,

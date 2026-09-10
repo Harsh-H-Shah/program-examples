@@ -53,8 +53,13 @@ describe('nft-staking litesvm', () => {
     // actually staking, so the tests exercise a real second signer.
     const staker = Keypair.generate();
     const otherUser = Keypair.generate();
+    const otherAdmin = Keypair.generate();
 
-    const config = PublicKey.findProgramAddressSync([Buffer.from('config')], PROGRAM_ID)[0];
+    // Pools are seeded by their admin, so the derivation includes the wallet.
+    const config = PublicKey.findProgramAddressSync(
+        [Buffer.from('config'), wallet.publicKey.toBuffer()],
+        PROGRAM_ID,
+    )[0];
     const rewardsMint = PublicKey.findProgramAddressSync([Buffer.from('rewards'), config.toBuffer()], PROGRAM_ID)[0];
     const userAccount = PublicKey.findProgramAddressSync(
         [Buffer.from('user'), staker.publicKey.toBuffer()],
@@ -185,6 +190,7 @@ describe('nft-staking litesvm', () => {
     it('Test preparation - mints a collection and the NFTs each case needs', async () => {
         client.airdrop(staker.publicKey, BigInt(10 * LAMPORTS_PER_SOL));
         client.airdrop(otherUser.publicKey, BigInt(10 * LAMPORTS_PER_SOL));
+        client.airdrop(otherAdmin.publicKey, BigInt(10 * LAMPORTS_PER_SOL));
 
         collectionMint = (await createNft({ owner: wallet.publicKey })).mint;
         otherCollectionMint = (await createNft({ owner: wallet.publicKey })).mint;
@@ -238,6 +244,77 @@ describe('nft-staking litesvm', () => {
         // otherwise the admin could mint rewards out of thin air.
         const mintAccount = client.getAccount(rewardsMint)!;
         assert.strictEqual(new PublicKey(mintAccount.data.subarray(4, 36)).toBase58(), config.toBase58());
+    });
+
+    // A pool is seeded by its admin, so initializing one never blocks anyone
+    // else from running their own.
+    it('Lets a second admin run their own pool', async () => {
+        const otherConfig = PublicKey.findProgramAddressSync(
+            [Buffer.from('config'), otherAdmin.publicKey.toBuffer()],
+            PROGRAM_ID,
+        )[0];
+
+        await program.methods
+            .initializeConfig(new anchor.BN(POINTS_PER_DAY), MAX_STAKE, FREEZE_PERIOD_DAYS, REWARD_DECIMALS)
+            .accountsPartial({
+                admin: otherAdmin.publicKey,
+                collectionMint,
+                config: otherConfig,
+                rewardsMint: PublicKey.findProgramAddressSync(
+                    [Buffer.from('rewards'), otherConfig.toBuffer()],
+                    PROGRAM_ID,
+                )[0],
+                systemProgram: SystemProgram.programId,
+                tokenProgram: TOKEN_PROGRAM_ID,
+            })
+            .signers([otherAdmin])
+            .rpc();
+
+        const account = await program.account.stakeConfig.fetch(otherConfig);
+        assert.strictEqual(account.admin.toBase58(), otherAdmin.publicKey.toBase58());
+    });
+
+    // `unstake` settles rewards before it thaws, so a rate that can overflow
+    // would strand the NFT frozen. These have to be rejected up front.
+    it('Rejects pool settings that would strand a staked NFT', async () => {
+        const badAdmin = Keypair.generate();
+        client.airdrop(badAdmin.publicKey, BigInt(10 * LAMPORTS_PER_SOL));
+
+        const badConfig = PublicKey.findProgramAddressSync(
+            [Buffer.from('config'), badAdmin.publicKey.toBuffer()],
+            PROGRAM_ID,
+        )[0];
+        const badRewardsMint = PublicKey.findProgramAddressSync(
+            [Buffer.from('rewards'), badConfig.toBuffer()],
+            PROGRAM_ID,
+        )[0];
+
+        const initWith = (pointsPerDay: number | bigint, maxStake: number, decimals: number) =>
+            program.methods
+                .initializeConfig(new anchor.BN(pointsPerDay.toString()), maxStake, FREEZE_PERIOD_DAYS, decimals)
+                .accountsPartial({
+                    admin: badAdmin.publicKey,
+                    collectionMint,
+                    config: badConfig,
+                    rewardsMint: badRewardsMint,
+                    systemProgram: SystemProgram.programId,
+                    tokenProgram: TOKEN_PROGRAM_ID,
+                })
+                .signers([badAdmin])
+                .rpc();
+
+        // A pool nobody can stake in.
+        await expectAnchorError(initWith(POINTS_PER_DAY, 0, REWARD_DECIMALS), 'InvalidConfig');
+
+        client.expireBlockhash();
+        // More decimals than an SPL mint conventionally carries.
+        await expectAnchorError(initWith(POINTS_PER_DAY, MAX_STAKE, 20), 'InvalidConfig');
+
+        client.expireBlockhash();
+        // Scaled payout that overflows u64 well inside the pool's lifetime.
+        await expectAnchorError(initWith(2n ** 60n, MAX_STAKE, REWARD_DECIMALS), 'InvalidConfig');
+
+        assert.isNull(client.getAccount(badConfig), 'no config should have been created');
     });
 
     it('Initializes the user accounts', async () => {

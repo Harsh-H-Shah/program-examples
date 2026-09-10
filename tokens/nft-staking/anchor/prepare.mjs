@@ -12,23 +12,20 @@ const programs = [
 ];
 
 const outputDir = 'tests/fixtures';
-const overwrite = true;
 
-try {
-    for (const program of programs) {
-        const { id, name } = program;
-        const outputFile = join(outputDir, name);
-        await $`solana config set -um`;
+// The cluster is passed per command rather than via `solana config set`, so
+// installing this example never changes the machine's default cluster.
+const cluster = 'https://api.mainnet-beta.solana.com';
 
-        try {
-            await mkdir(outputDir, { recursive: true });
-            if (overwrite) await rm(outputFile, { force: true });
-            await $`solana program dump ${id} ${outputFile}`;
-            console.log(`Program ${id} dumped to ${outputFile}`);
-        } catch (error) {
-            console.error(`Error dumping ${id}: ${error.message}`);
-        }
-    }
-} catch (error) {
-    console.error(`Unexpected error: ${error.message}`);
+for (const { id, name } of programs) {
+    const outputFile = join(outputDir, name);
+
+    await mkdir(outputDir, { recursive: true });
+    await rm(outputFile, { force: true });
+
+    // No try/catch: the tests load these fixtures unconditionally, so a failed
+    // dump has to fail the install rather than surface later as litesvm
+    // refusing to open a missing file.
+    await $`solana program dump ${id} ${outputFile} --url ${cluster}`;
+    console.log(`Program ${id} dumped to ${outputFile}`);
 }

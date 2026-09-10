@@ -44,12 +44,18 @@ this program mints under rules it sets itself, and none of it touches consensus.
 
 | Account        | Seeds                         | Holds                                                          |
 | -------------- | ----------------------------- | -------------------------------------------------------------- |
-| `StakeConfig`  | `["config"]`                  | Collection, reward rate, stake cap, freeze period              |
+| `StakeConfig`  | `["config", admin]`           | Collection, reward rate, stake cap, freeze period              |
 | `UserAccount`  | `["user", user]`              | Lifetime points earned, how many NFTs are currently staked     |
 | `StakeAccount` | `["stake", nft_mint, config]` | Owner, mint, `staked_at`, and the `last_claimed_at` checkpoint |
 
 `StakeAccount` doubles as the SPL delegate for the staked NFT's token account,
 which is what lets the program freeze and thaw it.
+
+Pools are seeded by their admin rather than living at a single `["config"]`
+address, so anyone can run one and no one can take the only slot.
+`initialize_config` also validates its own settings: `unstake` pays out before it thaws,
+so a reward rate large enough to overflow `u64` would leave the NFT frozen with
+no way to recover it. Those settings are rejected up front instead.
 
 ## The part worth reading closely: paying for time, once
 

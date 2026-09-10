@@ -51,7 +51,8 @@ pub fn mint_reward_tokens<'info>(
         .ok_or(StakeError::Overflow)?;
 
     // The config PDA is the reward mint's authority, so the program signs here.
-    let seeds = &[b"config".as_ref(), &[config.bump]];
+    let admin = config.admin;
+    let seeds = &[b"config".as_ref(), admin.as_ref(), &[config.bump]];
     let signer_seeds = &[&seeds[..]];
 
     mint_to(

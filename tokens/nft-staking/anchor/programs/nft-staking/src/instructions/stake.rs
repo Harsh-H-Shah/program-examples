@@ -41,7 +41,7 @@ pub struct Stake<'info> {
     pub edition: Account<'info, MasterEditionAccount>,
 
     #[account(
-        seeds = [b"config"],
+        seeds = [b"config", config.admin.as_ref()],
         bump = config.bump,
     )]
     pub config: Account<'info, StakeConfig>,
