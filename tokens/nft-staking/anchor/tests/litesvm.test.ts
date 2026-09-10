@@ -61,13 +61,28 @@ describe('nft-staking litesvm', () => {
         PROGRAM_ID,
     )[0];
     const rewardsMint = PublicKey.findProgramAddressSync([Buffer.from('rewards'), config.toBuffer()], PROGRAM_ID)[0];
-    const userAccount = PublicKey.findProgramAddressSync(
-        [Buffer.from('user'), staker.publicKey.toBuffer()],
+    const userPda = (poolConfig: PublicKey, owner: PublicKey) =>
+        PublicKey.findProgramAddressSync([Buffer.from('user'), poolConfig.toBuffer(), owner.toBuffer()], PROGRAM_ID)[0];
+
+    const userAccount = userPda(config, staker.publicKey);
+
+    // A second pool under a different admin, used to prove pools are isolated.
+    const otherConfig = PublicKey.findProgramAddressSync(
+        [Buffer.from('config'), otherAdmin.publicKey.toBuffer()],
+        PROGRAM_ID,
+    )[0];
+    const otherRewardsMint = PublicKey.findProgramAddressSync(
+        [Buffer.from('rewards'), otherConfig.toBuffer()],
         PROGRAM_ID,
     )[0];
 
-    const stakePda = (nftMint: PublicKey) =>
-        PublicKey.findProgramAddressSync([Buffer.from('stake'), nftMint.toBuffer(), config.toBuffer()], PROGRAM_ID)[0];
+    const stakePdaIn = (nftMint: PublicKey, poolConfig: PublicKey) =>
+        PublicKey.findProgramAddressSync(
+            [Buffer.from('stake'), nftMint.toBuffer(), poolConfig.toBuffer()],
+            PROGRAM_ID,
+        )[0];
+
+    const stakePda = (nftMint: PublicKey) => stakePdaIn(nftMint, config);
 
     const tokenAccount = (address: PublicKey) => AccountLayout.decode(client.getAccount(address)!.data);
 
@@ -181,6 +196,7 @@ describe('nft-staking litesvm', () => {
     let otherCollectionMint: PublicKey;
     let nftA: { mint: PublicKey; ata: PublicKey };
     let nftB: { mint: PublicKey; ata: PublicKey };
+    let nftC: { mint: PublicKey; ata: PublicKey };
     let nftNotHeld: { mint: PublicKey; ata: PublicKey };
     let nftNoCollection: { mint: PublicKey; ata: PublicKey };
     let nftUnverified: { mint: PublicKey; ata: PublicKey };
@@ -197,6 +213,7 @@ describe('nft-staking litesvm', () => {
 
         nftA = await createNft({ owner: staker.publicKey, collection: collectionMint, verify: true });
         nftB = await createNft({ owner: staker.publicKey, collection: collectionMint, verify: true });
+        nftC = await createNft({ owner: staker.publicKey, collection: collectionMint, verify: true });
         nftNoCollection = await createNft({ owner: staker.publicKey });
         nftUnverified = await createNft({ owner: staker.publicKey, collection: collectionMint, verify: false });
         nftWrongCollection = await createNft({
@@ -249,21 +266,13 @@ describe('nft-staking litesvm', () => {
     // A pool is seeded by its admin, so initializing one never blocks anyone
     // else from running their own.
     it('Lets a second admin run their own pool', async () => {
-        const otherConfig = PublicKey.findProgramAddressSync(
-            [Buffer.from('config'), otherAdmin.publicKey.toBuffer()],
-            PROGRAM_ID,
-        )[0];
-
         await program.methods
             .initializeConfig(new anchor.BN(POINTS_PER_DAY), MAX_STAKE, FREEZE_PERIOD_DAYS, REWARD_DECIMALS)
             .accountsPartial({
                 admin: otherAdmin.publicKey,
                 collectionMint,
                 config: otherConfig,
-                rewardsMint: PublicKey.findProgramAddressSync(
-                    [Buffer.from('rewards'), otherConfig.toBuffer()],
-                    PROGRAM_ID,
-                )[0],
+                rewardsMint: otherRewardsMint,
                 systemProgram: SystemProgram.programId,
                 tokenProgram: TOKEN_PROGRAM_ID,
             })
@@ -320,7 +329,12 @@ describe('nft-staking litesvm', () => {
     it('Initializes the user accounts', async () => {
         await program.methods
             .initializeUser()
-            .accountsPartial({ user: staker.publicKey, userAccount, systemProgram: SystemProgram.programId })
+            .accountsPartial({
+                user: staker.publicKey,
+                config,
+                userAccount,
+                systemProgram: SystemProgram.programId,
+            })
             .signers([staker])
             .rpc();
 
@@ -328,10 +342,8 @@ describe('nft-staking litesvm', () => {
             .initializeUser()
             .accountsPartial({
                 user: otherUser.publicKey,
-                userAccount: PublicKey.findProgramAddressSync(
-                    [Buffer.from('user'), otherUser.publicKey.toBuffer()],
-                    PROGRAM_ID,
-                )[0],
+                config,
+                userAccount: userPda(config, otherUser.publicKey),
                 systemProgram: SystemProgram.programId,
             })
             .signers([otherUser])
@@ -422,6 +434,54 @@ describe('nft-staking litesvm', () => {
         );
     });
 
+    // The cap and the points total live on a per-pool account, so being maxed
+    // out in one pool must not affect another pool run by a different admin.
+    it('Enforces stake caps per pool, not globally', async () => {
+        const otherUserAccount = userPda(otherConfig, staker.publicKey);
+
+        await program.methods
+            .initializeUser()
+            .accountsPartial({
+                user: staker.publicKey,
+                config: otherConfig,
+                userAccount: otherUserAccount,
+                systemProgram: SystemProgram.programId,
+            })
+            .signers([staker])
+            .rpc();
+
+        // Already at max_stake in the first pool; this must still go through.
+        await program.methods
+            .stake()
+            .accountsPartial({
+                user: staker.publicKey,
+                nftMint: nftC.mint,
+                nftTokenAccount: nftC.ata,
+                metadata: metadataPda(nftC.mint),
+                edition: masterEditionPda(nftC.mint),
+                config: otherConfig,
+                stakeAccount: stakePdaIn(nftC.mint, otherConfig),
+                userAccount: otherUserAccount,
+                systemProgram: SystemProgram.programId,
+                tokenProgram: TOKEN_PROGRAM_ID,
+                metadataProgram: TOKEN_METADATA_PROGRAM_ID,
+            })
+            .signers([staker])
+            .rpc();
+
+        assert.strictEqual(tokenAccount(nftC.ata).state, FROZEN, 'the second pool should have staked the NFT');
+        assert.strictEqual(
+            (await program.account.userAccount.fetch(otherUserAccount)).amountStaked,
+            1,
+            'the second pool tracks its own count',
+        );
+        assert.strictEqual(
+            (await program.account.userAccount.fetch(userAccount)).amountStaked,
+            1,
+            'the first pool is unaffected',
+        );
+    });
+
     it('Pays nothing before a whole day has passed', async () => {
         await expectAnchorError(
             program.methods
@@ -476,10 +536,7 @@ describe('nft-staking litesvm', () => {
     });
 
     it("Rejects a claim against another user's stake position", async () => {
-        const otherUserAccount = PublicKey.findProgramAddressSync(
-            [Buffer.from('user'), otherUser.publicKey.toBuffer()],
-            PROGRAM_ID,
-        )[0];
+        const otherUserAccount = userPda(config, otherUser.publicKey);
 
         await expectAnchorError(
             program.methods

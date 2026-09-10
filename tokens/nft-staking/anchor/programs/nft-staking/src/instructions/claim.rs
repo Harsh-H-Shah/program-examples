@@ -47,7 +47,7 @@ pub struct Claim<'info> {
 
     #[account(
         mut,
-        seeds = [b"user", user.key().as_ref()],
+        seeds = [b"user", config.key().as_ref(), user.key().as_ref()],
         bump = user_account.bump,
     )]
     pub user_account: Account<'info, UserAccount>,

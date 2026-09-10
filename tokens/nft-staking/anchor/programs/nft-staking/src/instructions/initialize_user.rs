@@ -1,6 +1,6 @@
 use anchor_lang::prelude::*;
 
-use crate::{UserAccount, ANCHOR_DISCRIMINATOR};
+use crate::{StakeConfig, UserAccount, ANCHOR_DISCRIMINATOR};
 
 #[derive(Accounts)]
 pub struct InitializeUser<'info> {
@@ -8,10 +8,19 @@ pub struct InitializeUser<'info> {
     pub user: Signer<'info>,
 
     #[account(
+        seeds = [b"config", config.admin.as_ref()],
+        bump = config.bump,
+    )]
+    pub config: Account<'info, StakeConfig>,
+
+    /// Scoped to the pool as well as the user: the stake cap and the points
+    /// total belong to one pool, so a user hitting the cap in one must not
+    /// affect their standing in another.
+    #[account(
         init,
         payer = user,
         space = ANCHOR_DISCRIMINATOR + UserAccount::INIT_SPACE,
-        seeds = [b"user", user.key().as_ref()],
+        seeds = [b"user", config.key().as_ref(), user.key().as_ref()],
         bump,
     )]
     pub user_account: Account<'info, UserAccount>,

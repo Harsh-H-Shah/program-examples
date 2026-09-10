@@ -35,7 +35,7 @@ this program mints under rules it sets itself, and none of it touches consensus.
 | Instruction         | What it does                                                                              |
 | ------------------- | ----------------------------------------------------------------------------------------- |
 | `initialize_config` | Creates the pool and its reward mint, whose mint authority is the config PDA              |
-| `initialize_user`   | Creates the caller's per-user totals account                                              |
+| `initialize_user`   | Creates the caller's totals account for one pool                                          |
 | `stake`             | Verifies collection membership, delegates the token account to a PDA, and freezes it      |
 | `claim`             | Pays out rewards accrued since the last claim — callable while the NFT is still staked    |
 | `unstake`           | Settles any outstanding rewards, thaws and un-delegates the NFT, closes the stake account |
@@ -45,14 +45,16 @@ this program mints under rules it sets itself, and none of it touches consensus.
 | Account        | Seeds                         | Holds                                                          |
 | -------------- | ----------------------------- | -------------------------------------------------------------- |
 | `StakeConfig`  | `["config", admin]`           | Collection, reward rate, stake cap, freeze period              |
-| `UserAccount`  | `["user", user]`              | Lifetime points earned, how many NFTs are currently staked     |
+| `UserAccount`  | `["user", config, user]`      | Lifetime points earned, how many NFTs are currently staked     |
 | `StakeAccount` | `["stake", nft_mint, config]` | Owner, mint, `staked_at`, and the `last_claimed_at` checkpoint |
 
 `StakeAccount` doubles as the SPL delegate for the staked NFT's token account,
 which is what lets the program freeze and thaw it.
 
 Pools are seeded by their admin rather than living at a single `["config"]`
-address, so anyone can run one and no one can take the only slot.
+address, so anyone can run one and no one can take the only slot. `UserAccount`
+is scoped to its pool for the same reason — the stake cap and points total
+belong to one pool, so hitting the cap in one does not lock a user out of another.
 `initialize_config` also validates its own settings: `unstake` pays out before it thaws,
 so a reward rate large enough to overflow `u64` would leave the NFT frozen with
 no way to recover it. Those settings are rejected up front instead.
@@ -114,7 +116,7 @@ the freeze and thaw paths are exercised for real rather than mocked.
 
 ## Notes
 
-- `max_stake` caps how many NFTs one user may stake at once.
+- `max_stake` caps how many NFTs one user may stake at once, per pool.
 - `freeze_period_days` is a minimum staking duration; `unstake` rejects until it
   has elapsed. Rewards still accrue and can be claimed during it.
 - Reward token decimals are set when the pool is created, and points are scaled
